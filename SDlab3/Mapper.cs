@@ -11,7 +11,7 @@ namespace SDlab3.Models
             return new DimDate
             {
                 Day = saleDate.Day,
-                DayOfWeek = saleDate.ToString("dddd"), // Повна назва дня тижня, аналог TO_CHAR(sale_date, 'Day')
+                DayOfWeek = saleDate.ToString("dddd"), 
                 Month = saleDate.Month,
                 Year = saleDate.Year
             };
@@ -49,8 +49,7 @@ namespace SDlab3.Models
             {
                 DeptCode = department.DeptCode,
                 DeptName = department.DeptName,
-                City = "Unknown" // У вашій моделі OLTP немає поля City, тому ставимо заглушку
-                                 // Якщо у вас є джерело для City, додайте його сюди
+                City = "Unknown" 
             };
         }
 
@@ -59,13 +58,14 @@ namespace SDlab3.Models
         {
             return new TransactionType
             {
-                IsCashless = sale.IsCashless, // Обробляємо null, ставимо false за замовчуванням
+                IsCashless = sale.IsCashless, 
                 IsReturned = !string.IsNullOrEmpty(sale.ReturnReason)
             };
         }
 
         // 6. SalesFact
         public static SalesFact MapToSalesFact(
+            long saleId,
             Sale sale,
             long dateId,
             string deptCode,
@@ -74,6 +74,7 @@ namespace SDlab3.Models
         {
             return new SalesFact
             {
+                SaleId = saleId,
                 DateId = dateId,
                 DeptCode = deptCode,
                 ProductId = productId,

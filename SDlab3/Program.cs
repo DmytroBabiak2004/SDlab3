@@ -9,11 +9,11 @@ namespace SDlab3
     {
         public static async Task Main(string[] args)
         {
-            // Жорстко закодовані рядки підключення до баз даних
-            var sourceConnectionString = "Host=localhost;Port=5432;Database=storetransactionsdb;Username=postgres;Password=admin;CommandTimeout=60";
-            var targetConnectionString = "Host=localhost;Port=5432;Database=OLAPStoreTransactionDB;Username=postgres;Password=admin;CommandTimeout=60";
+            
+            var sourceConnectionString = "Host=localhost;Port=5432;Database=storetransactionsdb;Username=postgres;Password=admin;";
+            var targetConnectionString = "Host=localhost;Port=5432;Database=OLAPStoreTransactionDB;Username=postgres;Password=admin;";
 
-            // Налаштування контекстів баз даних
+           
             var sourceOptions = new DbContextOptionsBuilder<StoretransactionsdbContext>()
                 .UseNpgsql(sourceConnectionString)
                 .Options;
@@ -21,11 +21,11 @@ namespace SDlab3
                 .UseNpgsql(targetConnectionString)
                 .Options;
 
-            // Ініціалізація контекстів
+           
             using var sourceContext = new StoretransactionsdbContext(sourceOptions);
             using var targetContext = new OlapstoreTransactionDbContext(targetOptions);
 
-            // Ініціалізація сервісів
+            
             var dateService = new DateTransferService(sourceContext, targetContext);
             var deptService = new DepartmentTransferService(sourceContext, targetContext);
             var productService = new ProductTransferService(sourceContext, targetContext);
@@ -34,7 +34,6 @@ namespace SDlab3
             var dimMonthService = new MonthTransferService(sourceContext, targetContext);
             var monthlySalesAggService = new MonthlySalesAggTransferService(targetContext);
 
-            // Виконання первинного завантаження
             Console.WriteLine("Starting initial data transfer...");
             await dateService.TransferDatesAsync();
             await deptService.TransferDepartmentsAsync();
@@ -44,13 +43,13 @@ namespace SDlab3
             await dimMonthService.TransferDimMonthsAsync();
             await monthlySalesAggService.TransferMonthlySalesAggAsync();
 
-            //// Виконання інкрементного оновлення
-            //Console.WriteLine("Starting incremental update...");
-            //await dateService.TransferNewDatesAsync();
-            //await deptService.TransferNewDepartmentsAsync();
-            //await productService.TransferNewProductsAsync();
-            //await transactionService.TransferNewTransactionTypesAsync();
-            //await salesService.TransferNewSalesFactsAsync();
+            Console.WriteLine("Starting incremental update...");
+            await dateService.TransferNewDatesAsync();
+            await deptService.TransferNewDepartmentsAsync();
+            await productService.TransferNewProductsAsync();
+            await transactionService.TransferNewTransactionTypesAsync();
+            await salesService.TransferNewSalesFactsAsync();
+
 
             Console.WriteLine("Data transfer completed.");
         }

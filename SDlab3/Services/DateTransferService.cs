@@ -19,7 +19,8 @@ public class DateTransferService(StoretransactionsdbContext sourceContext, Olaps
 
         while (processedCount < dateCount)
         {
-            await AddDates(await GetDates(sourceContext.Sales, processedCount));
+            var datesToAdd = await GetDates(sourceContext.Sales, processedCount);
+            await AddDates(datesToAdd);
 
             processedCount += BatchSize;
             LoggerService.RecordTransferCount(processedCount, nameof(DimDate));
@@ -28,62 +29,69 @@ public class DateTransferService(StoretransactionsdbContext sourceContext, Olaps
 
     public async Task TransferNewDatesAsync()
     {
-        var latestDateId = await targetContext.DimDates
-            .OrderByDescending(d => d.DateId)
-            .Select(d => d.DateId)
-            .FirstOrDefaultAsync();
-
         var latestDate = await targetContext.DimDates
-            .Where(d => d.DateId == latestDateId)
+            .OrderByDescending(d => new DateTime(d.Year, d.Month, d.Day))
             .Select(d => new DateTime(d.Year, d.Month, d.Day))
             .FirstOrDefaultAsync();
 
-        // Завантажуємо всі існуючі дати з DimDates у пам’ять
-        var existingDates = await targetContext.DimDates
-            .Select(d => new { d.Day, d.Month, d.Year })
-            .ToListAsync();
-
         while (true)
         {
-            // Фільтруємо Sales, використовуючи existingDates у пам’яті
+            // Витягуємо нові дати з джерела
             var newDates = sourceContext.Sales
                 .AsNoTracking()
-                .Where(s => s.SaleDate.Date >= latestDate)
-                .AsEnumerable() // Переходимо до клієнтської оцінки для Contains
-                .Where(s => !existingDates.Any(d => d.Day == s.SaleDate.Day &&
-                                                   d.Month == s.SaleDate.Month &&
-                                                   d.Year == s.SaleDate.Year))
-                .Select(s => s.SaleDate)
+                .Where(s => s.SaleDate.Date > latestDate)
+                .Select(s => s.SaleDate.Date)
                 .Distinct()
                 .OrderBy(d => d)
                 .Take(BatchSize)
-                .Select(d => Mapper.MapToDimDate(d))
                 .ToList();
 
-            if (newDates.Count() == 0)
+            if (newDates.Count == 0)
                 break;
 
-            await AddDates(newDates);
-            latestDate = newDates.Max(d => new DateTime(d.Year, d.Month, d.Day));
+            var mappedDates = newDates.Select(Mapper.MapToDimDate).ToList();
+            await AddDates(mappedDates);
+
+            latestDate = newDates.Max();
         }
     }
 
     private async Task AddDates(List<DimDate> dates)
     {
-        await targetContext.DimDates.AddRangeAsync(dates);
-        await targetContext.SaveChangesAsync();
+        if (dates.Count == 0)
+            return;
+
+        // Отримуємо існуючі дати з БД
+        var existingDates = await targetContext.DimDates
+            .Select(d => new { d.Day, d.Month, d.Year })
+            .ToListAsync();
+
+        // Фільтруємо ті, що ще не існують
+        var newDates = dates
+            .Where(d => !existingDates.Any(e =>
+                e.Day == d.Day &&
+                e.Month == d.Month &&
+                e.Year == d.Year))
+            .ToList();
+
+        if (newDates.Count > 0)
+        {
+            await targetContext.DimDates.AddRangeAsync(newDates);
+            await targetContext.SaveChangesAsync();
+        }
     }
 
     private static async Task<List<DimDate>> GetDates(IQueryable<Sale> sales, int skip = 0)
     {
-        return await sales
+        var dates = await sales
             .AsNoTracking()
-            .Select(s => s.SaleDate)
+            .Select(s => s.SaleDate.Date)
             .Distinct()
             .OrderBy(d => d)
             .Skip(skip)
             .Take(BatchSize)
-            .Select(d => Mapper.MapToDimDate(d))
             .ToListAsync();
+
+        return dates.Select(Mapper.MapToDimDate).ToList();
     }
 }

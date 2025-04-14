@@ -7,31 +7,39 @@ namespace SDlab3.Services;
 
 public class SalesFactTransferService
 {
-    private readonly StoretransactionsdbContext _sourceContext; // Поле для sourceContext
-    private readonly OlapstoreTransactionDbContext _targetContext; // Поле для targetContext
+    private readonly StoretransactionsdbContext _sourceContext;
+    private readonly OlapstoreTransactionDbContext _targetContext;
     private const int BatchSize = 1000;
 
-    // Конструктор із залежностями
     public SalesFactTransferService(StoretransactionsdbContext sourceContext, OlapstoreTransactionDbContext targetContext)
     {
         _sourceContext = sourceContext;
         _targetContext = targetContext;
     }
-
     public async Task TransferSalesFactsAsync()
     {
-        var saleCount = await _sourceContext.Sales.CountAsync();
-        var processedCount = LoggerService.GetProcessedCount(nameof(SalesFact));
+        var minDate = await _sourceContext.Sales.MinAsync(s => s.SaleDate);
+        var maxDate = await _sourceContext.Sales.MaxAsync(s => s.SaleDate);
 
-        while (processedCount < saleCount)
+        var currentDate = minDate;
+
+        while (currentDate <= maxDate)
         {
-            var sales = await GetSalesFacts(_sourceContext.Sales, processedCount);
+            var sales = await GetSalesFacts(
+                _sourceContext.Sales.Where(s => s.SaleDate == currentDate),
+                0); // не skipаємо, бо вже фільтруємо по даті
+
+            if (sales.Count() == 0)
+            {
+                currentDate = currentDate.AddDays(1);
+                continue;
+            }
 
             await _targetContext.SalesFacts.AddRangeAsync(sales);
             await _targetContext.SaveChangesAsync();
 
-            processedCount += BatchSize;
-            LoggerService.RecordTransferCount(processedCount, nameof(SalesFact));
+            LoggerService.RecordTransferCount(sales.Count(), nameof(SalesFact));
+            currentDate = currentDate.AddDays(1);
         }
     }
 
@@ -41,54 +49,41 @@ public class SalesFactTransferService
             .Select(s => s.SaleId)
             .ToListAsync();
 
-        while (true)
+        var minDate = await _sourceContext.Sales.MinAsync(s => s.SaleDate);
+        var maxDate = await _sourceContext.Sales.MaxAsync(s => s.SaleDate);
+
+        var currentDate = minDate;
+
+        while (currentDate <= maxDate)
         {
-            var salesToTransfer = await _sourceContext.Sales
-                .Where(s => !existingSaleIds.Contains(s.SaleId))
-                .OrderBy(s => s.SaleId)
-                .Include(s => s.DeptCodeNavigation)
-                .Include(s => s.Product)
-                .AsNoTracking()
-                .Take(BatchSize)
-                .Select(s => new Sale
-                {
-                    SaleId = s.SaleId,
-                    ProductId = s.ProductId,
-                    DeptCode = s.DeptCode,
-                    SaleDate = s.SaleDate,
-                    Quantity = s.Quantity,
-                    Price = s.Price,
-                    IsCashless = s.IsCashless,
-                    ReturnReason = s.ReturnReason,
-                    DeptCodeNavigation = s.DeptCodeNavigation == null ? null : new Department
-                    {
-                        DeptCode = s.DeptCodeNavigation.DeptCode,
-                        DeptName = s.DeptCodeNavigation.DeptName
-                    },
-                    Product = s.Product == null ? null : new Product
-                    {
-                        ProductId = s.Product.ProductId,
-                        Name = s.Product.Name
-                    }
-                })
-                .ToListAsync();
+            var salesQuery = _sourceContext.Sales
+                .Where(s => s.SaleDate == currentDate && !existingSaleIds.Contains(s.SaleId));
 
-            if (salesToTransfer.Count == 0)
-                break;
+            int processedCount = 0;
 
-            var newSales = await GetNewSalesFacts(salesToTransfer);
-
-            await _targetContext.SalesFacts.AddRangeAsync(newSales);
-            await _targetContext.SaveChangesAsync();
-
-            foreach (var sale in salesToTransfer)
+            while (true)
             {
-                existingSaleIds.Add(sale.SaleId);
+                var sales = await GetSalesFacts(salesQuery, processedCount);
+                if (sales.Count() == 0)
+                    break;
+
+                await _targetContext.SalesFacts.AddRangeAsync(sales);
+                await _targetContext.SaveChangesAsync();
+
+                foreach (var sale in sales)
+                {
+                    existingSaleIds.Add(sale.SaleId);
+                }
+
+                processedCount += sales.Count();
             }
+
+            currentDate = currentDate.AddDays(1);
         }
     }
 
-    private async Task<List<SalesFact>> GetSalesFacts(IQueryable<Sale> sales, int skip = 0)
+
+    private async Task<List<SalesFact>> GetSalesFacts(IQueryable<Sale> sales, int skip)
     {
         var salesList = await sales
             .AsNoTracking()
@@ -106,6 +101,7 @@ public class SalesFactTransferService
             .ToDictionaryAsync(t => t.TransactionTypeId, t => new { t.IsCashless, t.IsReturned });
 
         var result = new List<SalesFact>();
+
         foreach (var s in salesList)
         {
             var dateMatch = dateLookup.FirstOrDefault(d => d.Value.Day == s.SaleDate.Day &&
@@ -132,6 +128,7 @@ public class SalesFactTransferService
                 throw new KeyNotFoundException($"No TransactionTypeId found for IsCashless={s.IsCashless}, IsReturned={!string.IsNullOrEmpty(s.ReturnReason)}");
 
             result.Add(Mapper.MapToSalesFact(
+                s.SaleId,
                 s,
                 dateId,
                 s.DeptCode ?? "Unknown",
@@ -143,51 +140,4 @@ public class SalesFactTransferService
         return result;
     }
 
-    private async Task<List<SalesFact>> GetNewSalesFacts(List<Sale> sales)
-    {
-        var salesList = sales;
-
-        var dateLookup = await _targetContext.DimDates
-            .ToDictionaryAsync(d => d.DateId, d => new { d.Day, d.Month, d.Year });
-
-        var transactionLookup = await _targetContext.TransactionTypes
-            .ToDictionaryAsync(t => t.TransactionTypeId, t => new { t.IsCashless, t.IsReturned });
-
-        var result = new List<SalesFact>();
-        foreach (var s in salesList)
-        {
-            var dateMatch = dateLookup.FirstOrDefault(d => d.Value.Day == s.SaleDate.Day &&
-                                                          d.Value.Month == s.SaleDate.Month &&
-                                                          d.Value.Year == s.SaleDate.Year);
-
-            long dateId;
-            if (dateMatch.Key == 0)
-            {
-                var newDate = Mapper.MapToDimDate(s.SaleDate);
-                _targetContext.DimDates.Add(newDate);
-                await _targetContext.SaveChangesAsync();
-                dateId = newDate.DateId;
-                dateLookup[dateId] = new { newDate.Day, newDate.Month, newDate.Year };
-            }
-            else
-            {
-                dateId = dateMatch.Key;
-            }
-
-            var transactionMatch = transactionLookup.FirstOrDefault(t => t.Value.IsCashless == s.IsCashless &&
-                                                                       t.Value.IsReturned == !string.IsNullOrEmpty(s.ReturnReason));
-            if (transactionMatch.Key == 0)
-                throw new KeyNotFoundException($"No TransactionTypeId found for IsCashless={s.IsCashless}, IsReturned={!string.IsNullOrEmpty(s.ReturnReason)}");
-
-            result.Add(Mapper.MapToSalesFact(
-                s,
-                dateId,
-                s.DeptCode ?? "Unknown",
-                s.ProductId,
-                transactionMatch.Key
-            ));
-        }
-
-        return result;
-    }
 }
