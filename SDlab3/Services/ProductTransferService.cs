@@ -14,7 +14,6 @@ public class ProductTransferService(StoretransactionsdbContext sourceContext, Ol
         var productCount = await sourceContext.Products.CountAsync();
         var processedCount = LoggerService.GetProcessedCount(nameof(DimProduct));
 
-        // Отримуємо всі вже перенесені ідентифікатори, щоб не дублювати
         var existingProductIds = targetContext.DimProducts
             .AsNoTracking()
             .Select(p => p.ProductId)
@@ -24,7 +23,6 @@ public class ProductTransferService(StoretransactionsdbContext sourceContext, Ol
         {
             var products = await GetProductsAsync(sourceContext.Products, processedCount);
 
-            // Відкидаємо ті, що вже є
             var newProducts = products
                 .Where(p => !existingProductIds.Contains(p.ProductId))
                 .ToList();

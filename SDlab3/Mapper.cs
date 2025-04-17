@@ -5,7 +5,6 @@ namespace SDlab3.Models
 {
     public class Mapper
     {
-        // 1. DimDate
         public static DimDate MapToDimDate(DateTime saleDate)
         {
             return new DimDate
@@ -17,7 +16,6 @@ namespace SDlab3.Models
             };
         }
 
-        // 2. DimMonth
         public static DimMonth MapToDimMonth(DateTime saleDate)
         {
             return new DimMonth
@@ -27,7 +25,6 @@ namespace SDlab3.Models
             };
         }
 
-        // 3. DimProduct
         public static DimProduct MapToDimProduct(Product product, ProductCategory category, Brand brand)
         {
             if (product == null) throw new ArgumentNullException(nameof(product));
@@ -42,7 +39,6 @@ namespace SDlab3.Models
             };
         }
 
-        // 4. DimDepartment
         public static DimDepartment MapToDimDepartment(Department department)
         {
             return new DimDepartment
@@ -53,7 +49,6 @@ namespace SDlab3.Models
             };
         }
 
-        // 5. TransactionType
         public static TransactionType MapToTransactionType(Sale sale)
         {
             return new TransactionType
@@ -63,7 +58,6 @@ namespace SDlab3.Models
             };
         }
 
-        // 6. SalesFact
         public static SalesFact MapToSalesFact(
             long saleId,
             Sale sale,
@@ -85,7 +79,6 @@ namespace SDlab3.Models
             };
         }
 
-        // 7. MonthlySalesAgg
         public static MonthlySalesAgg MapToMonthlySalesAgg(
             int monthId,
             string deptCode,

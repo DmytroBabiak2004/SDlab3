@@ -1,92 +1,68 @@
-﻿using SDlab3.OLTPModels;
+﻿using System;
+using System.Linq;
+using System.Threading.Tasks;
+using Microsoft.EntityFrameworkCore;
 using SDlab3.OLAPModels;
 using SDlab3.Models;
-using Microsoft.EntityFrameworkCore;
 
-namespace SDlab3.Services;
-
-public class MonthlySalesAggTransferService
+namespace SDlab3.Services
 {
-    private readonly OlapstoreTransactionDbContext _targetContext;
-    private const int BatchSize = 1000;
-
-    public MonthlySalesAggTransferService(OlapstoreTransactionDbContext targetContext)
+    public class MonthlySalesAggService
     {
-        _targetContext = targetContext;
-    }
+        private readonly OlapstoreTransactionDbContext _context; 
 
-    public async Task TransferMonthlySalesAggAsync()
-    {
-        int processedCount = LoggerService.GetProcessedCount(nameof(MonthlySalesAgg));
-        var totalSalesFacts = await _targetContext.SalesFacts.CountAsync();
-
-        while (processedCount < totalSalesFacts)
+        public MonthlySalesAggService(OlapstoreTransactionDbContext context)
         {
-            var salesBatch = await _targetContext.SalesFacts
-                .Skip(processedCount)
-                .Take(BatchSize)
-                .Join(_targetContext.DimDates,
-                    sf => sf.DateId,
-                    dd => dd.DateId,
-                    (sf, dd) => new { SalesFact = sf, DimDate = dd })
-                .Join(_targetContext.TransactionTypes,
-                    s => s.SalesFact.TransactionTypeId,
+            _context = context ?? throw new ArgumentNullException(nameof(context));
+        }
+
+        public async Task GenerateMonthlySalesAggregatesAsync()
+        {
+           var aggregates = await _context.SalesFacts
+                .Join(_context.TransactionTypes,
+                    sf => sf.TransactionTypeId,
                     tt => tt.TransactionTypeId,
-                    (s, tt) => new { s.SalesFact, s.DimDate, TransactionType = tt })
-                .ToListAsync();
-
-            if (salesBatch.Count == 0)
-                break;
-
-            var monthLookup = await _targetContext.DimMonths
-                .ToDictionaryAsync(m => new { m.Month, m.Year }, m => m.MonthId);
-
-            var salesByMonthAndDept = salesBatch
-                .GroupBy(s => new { s.DimDate.Month, s.DimDate.Year, s.SalesFact.DeptCode })
+                    (sf, tt) => new { SalesFact = sf, TransactionType = tt })
+                .Join(_context.DimDates,
+                    sf => sf.SalesFact.DateId,
+                    dd => dd.DateId,
+                    (sf, dd) => new { sf.SalesFact, sf.TransactionType, DimDate = dd })
+                .Join(_context.DimMonths,
+                    sf => new { sf.DimDate.Month, sf.DimDate.Year },
+                    dm => new { dm.Month, dm.Year },
+                    (sf, dm) => new { sf.SalesFact, sf.TransactionType, DimMonth = dm })
+                .GroupBy(x => new { x.DimMonth.MonthId, x.SalesFact.DeptCode })
                 .Select(g => new
                 {
-                    Month = g.Key.Month,
-                    Year = g.Key.Year,
+                    MonthId = g.Key.MonthId,
                     DeptCode = g.Key.DeptCode,
-                    TotalSales = g.Sum(s => s.SalesFact.TotalSales * s.SalesFact.Quantity), // Врахування кількості
-                    TotalQuantity = g.Sum(s => s.SalesFact.Quantity),
-                    AverageDiscount = g.Any(s => s.SalesFact.Discount != 0) ? g.Average(s => s.SalesFact.Discount) : 0m,
-                    TotalReturns = g.Count(s => s.TransactionType.IsReturned),
-                    PercentCashless = g.Count() > 0 ? g.Count(s => s.TransactionType.IsCashless) * 100m / g.Count() : 0m
-                });
+                    TotalSales = g.Sum(x => x.SalesFact.TotalSales),
+                    TotalQuantity = g.Sum(x => x.SalesFact.Quantity),
+                    AverageDiscount = g.Average(x => x.SalesFact.Discount),
+                    TotalReturns = g.Count(x => x.TransactionType.IsReturned),
+                    PercentCashless = g.Average(x => x.TransactionType.IsCashless ? 1.0m : 0.0m) * 100
+                })
+                .ToListAsync();
 
-            foreach (var agg in salesByMonthAndDept)
+            _context.MonthlySalesAggs.RemoveRange(_context.MonthlySalesAggs);
+            await _context.SaveChangesAsync();
+
+            foreach (var agg in aggregates)
             {
-                var monthId = monthLookup[new { agg.Month, agg.Year }];
-                var existingAgg = await _targetContext.MonthlySalesAggs
-                    .FirstOrDefaultAsync(m => m.MonthId == monthId && m.DeptCode == agg.DeptCode);
+                var monthlySalesAgg = Mapper.MapToMonthlySalesAgg(
+                    monthId: agg.MonthId,
+                    deptCode: agg.DeptCode,
+                    totalSales: agg.TotalSales,
+                    totalQuantity: agg.TotalQuantity,
+                    averageDiscount: agg.AverageDiscount,
+                    totalReturns: agg.TotalReturns,
+                    percentCashless: agg.PercentCashless
+                );
 
-                if (existingAgg == null)
-                {
-                    var newAgg = Mapper.MapToMonthlySalesAgg(
-                        monthId,
-                        agg.DeptCode,
-                        agg.TotalSales,
-                        agg.TotalQuantity,
-                        agg.AverageDiscount,
-                        agg.TotalReturns,
-                        agg.PercentCashless
-                    );
-                    _targetContext.MonthlySalesAggs.Add(newAgg);
-                }
-                else
-                {
-                    existingAgg.TotalSales = agg.TotalSales; // Повна заміна, щоб уникнути дублювання
-                    existingAgg.TotalQuantity = agg.TotalQuantity;
-                    existingAgg.AverageDiscount = agg.AverageDiscount;
-                    existingAgg.TotalReturns = agg.TotalReturns;
-                    existingAgg.PercentCashless = agg.PercentCashless;
-                }
+                _context.MonthlySalesAggs.Add(monthlySalesAgg);
             }
 
-            await _targetContext.SaveChangesAsync();
-            processedCount += salesBatch.Count;
-            LoggerService.RecordTransferCount(processedCount, nameof(MonthlySalesAgg));
+            await _context.SaveChangesAsync();
         }
     }
 }

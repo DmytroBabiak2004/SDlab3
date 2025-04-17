@@ -36,7 +36,6 @@ public class DateTransferService(StoretransactionsdbContext sourceContext, Olaps
 
         while (true)
         {
-            // Витягуємо нові дати з джерела
             var newDates = sourceContext.Sales
                 .AsNoTracking()
                 .Where(s => s.SaleDate.Date > latestDate)
@@ -61,12 +60,10 @@ public class DateTransferService(StoretransactionsdbContext sourceContext, Olaps
         if (dates.Count == 0)
             return;
 
-        // Отримуємо існуючі дати з БД
         var existingDates = await targetContext.DimDates
             .Select(d => new { d.Day, d.Month, d.Year })
             .ToListAsync();
 
-        // Фільтруємо ті, що ще не існують
         var newDates = dates
             .Where(d => !existingDates.Any(e =>
                 e.Day == d.Day &&

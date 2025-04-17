@@ -18,14 +18,12 @@ public class MonthTransferService
 
     public async Task TransferDimMonthsAsync()
     {
-        // Отримуємо всі унікальні місяці та роки з джерела (Sales)
         var uniqueMonths = await _sourceContext.Sales
             .Select(s => new { s.SaleDate.Month, s.SaleDate.Year })
             .Distinct()
             .ToListAsync();
 
-        // Завантажуємо існуючі записи DimMonth
-        var existingMonths = await _targetContext.DimMonths
+       var existingMonths = await _targetContext.DimMonths
             .ToDictionaryAsync(m => new { m.Month, m.Year }, m => m.MonthId);
 
         foreach (var month in uniqueMonths)

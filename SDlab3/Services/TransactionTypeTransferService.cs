@@ -32,20 +32,17 @@ public class TransactionTypeTransferService(StoretransactionsdbContext sourceCon
 
     public async Task TransferNewTransactionTypesAsync()
     {
-        // 1. Завантажуємо всі унікальні комбінації з OLTP
         var allDistinctTypes = await sourceContext.Sales
             .AsNoTracking()
             .Select(s => new { s.IsCashless, IsReturned = !string.IsNullOrEmpty(s.ReturnReason) })
             .Distinct()
             .ToListAsync();
 
-        // 2. Завантажуємо вже перенесені комбінації
         var existingTypes = await targetContext.TransactionTypes
             .AsNoTracking()
             .Select(t => new { t.IsCashless, t.IsReturned })
             .ToListAsync();
 
-        // 3. Фільтруємо нові типи вручну
         var newTypes = allDistinctTypes
             .Where(nt => !existingTypes
                 .Any(et => et.IsCashless == nt.IsCashless && et.IsReturned == nt.IsReturned))
